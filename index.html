@@ -27,7 +27,10 @@
     --radius:14px;
   }
   @media (prefers-color-scheme: dark){
-    :root{ --bg:#15140F; --ink:#F1EEE6; --ink-soft:#A8A096; --line:#322E26; --card:#1E1C16; }
+    :root{
+      --bg:#15140F; --ink:#F1EEE6; --ink-soft:#A8A096; --line:#322E26; --card:#1E1C16;
+      --refund-soft:#3A2323;
+    }
   }
   *{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
   html,body{ margin:0; height:100%; }
@@ -202,7 +205,7 @@
   // Paste the Web app URL from your Google Apps Script deployment here.
   // See setup instructions — leave blank and "End Shift" will warn instead of saving.
   const CONFIG = {
-    SHEET_WEBHOOK_URL: ''
+    SHEET_WEBHOOK_URL: 'https://script.google.com/macros/s/AKfycbxhnvstPhZZxPfPzCKXI1LZqx-e0pVwO1JPuGXq23_u8Rn1xqzyCUbVIWwNuSxcuHCc/exec'
   };
 
   const STORAGE_KEY = 'gas-shift-transactions';
@@ -404,7 +407,8 @@
         console.error('Sheet save failed', e);
         $('end-shift-confirm').innerHTML = `
           <div class="confirm-box">
-            Couldn't confirm the Google Sheet received this shift. Your transactions are still here and have <strong>not</strong> been cleared — check the connection and tap End Shift again.
+            Couldn't confirm the Google Sheet received this shift. Your transactions are still here and have <strong>not</strong> been cleared.
+            <div style="margin-top:8px; font-size:12px; opacity:.85;">Details: ${String(e.message || e).replace(/</g,'&lt;')}</div>
             <div class="actions"><button class="confirm-no" id="cancel-end3">Close</button></div>
           </div>`;
         $('cancel-end3').addEventListener('click', () => { $('end-shift-confirm').innerHTML = ''; });
