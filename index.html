@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Shift Cash">
+<title>Gas Station — Shift Cash Tracker</title>
+<style>
+  :root{
+    --bg:#FAF7F2;
+    --ink:#1C1C1A;
+    --ink-soft:#6B6458;
+    --line:#DDD6C8;
+    --card:#FFFFFF;
+    --pump:#3F7A4D;
+    --pump-soft:#E7F1E9;
+    --cash:#2D6E8E;
+    --cash-soft:#E5EFF3;
+    --refund:#B23B3B;
+    --refund-soft:#FBE9E9;
+    --total:#D98B3F;
+    --total-soft:#FBEADA;
+    --display-bg:#1C2420;
+    --display-fg:#7BE39A;
+    --radius:14px;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#15140F; --ink:#F1EEE6; --ink-soft:#A8A096; --line:#322E26; --card:#1E1C16; }
+  }
+  *{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body{ margin:0; height:100%; }
+  body{
+    background:var(--bg);
+    color:var(--ink);
+    font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-variant-numeric: tabular-nums;
+    display:flex;
+    justify-content:center;
+    min-height:100vh;
+    padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+  #app{ width:100%; max-width:520px; padding:18px 16px 40px; }
+
+  header.top{ display:flex; align-items:baseline; justify-content:space-between; margin:6px 2px 18px; }
+  header.top h1{ font-size:17px; font-weight:700; margin:0; letter-spacing:.2px; }
+  header.top span{ font-size:12px; color:var(--ink-soft); }
+
+  .view{ display:none; }
+  .view.active{ display:block; animation:fade .18s ease; }
+  @keyframes fade{ from{opacity:0} to{opacity:1} }
+  @media (prefers-reduced-motion: reduce){ .view.active{ animation:none; } }
+
+  /* ---- pump-style transaction display ---- */
+  .ticket{
+    background:var(--display-bg);
+    border-radius:var(--radius);
+    padding:18px 20px;
+    text-align:center;
+    margin-bottom:18px;
+  }
+  .ticket .label{
+    color:#9FB3A6; font-size:11px; letter-spacing:1.5px; text-transform:uppercase; font-weight:600;
+  }
+  .ticket .num{
+    color:var(--display-fg);
+    font-family:"SF Mono", Menlo, Consolas, monospace;
+    font-size:54px; font-weight:700; letter-spacing:2px; line-height:1.1; margin-top:2px;
+    text-shadow:0 0 14px rgba(123,227,154,0.35);
+  }
+
+  .card{
+    background:var(--card); border:1px solid var(--line); border-radius:var(--radius);
+    padding:18px; margin-bottom:14px;
+  }
+
+  label.field-label{ display:block; font-size:13px; font-weight:600; color:var(--ink-soft); margin-bottom:8px; }
+
+  input#entry{
+    width:100%; font-size:24px; padding:14px 14px; border-radius:10px;
+    border:1.5px solid var(--line); background:var(--bg); color:var(--ink);
+    font-family:inherit; font-variant-numeric: tabular-nums;
+  }
+  input#entry:focus{ outline:none; border-color:var(--cash); }
+  .hint{ font-size:13px; color:var(--ink-soft); margin-top:8px; }
+  .err{ font-size:13.5px; color:var(--refund); margin-top:8px; font-weight:600; min-height:18px; }
+
+  button{ font-family:inherit; cursor:pointer; border:none; }
+  .btn-primary{
+    width:100%; margin-top:14px; padding:15px; font-size:17px; font-weight:700;
+    background:var(--cash); color:#fff; border-radius:10px;
+  }
+  .btn-primary:active{ opacity:.85; }
+
+  .row-btns{ display:flex; gap:10px; margin-top:6px; }
+  .btn-secondary{
+    flex:1; padding:14px 10px; font-size:14.5px; font-weight:700; border-radius:10px;
+    border:1.5px solid var(--line); background:var(--card); color:var(--ink);
+  }
+  .btn-secondary.refund{ color:var(--refund); border-color:var(--refund-soft); background:var(--refund-soft); }
+  .btn-secondary.totals{ color:var(--cash); border-color:var(--cash-soft); background:var(--cash-soft); }
+
+  .panel-header{ display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; }
+  .panel-header h2{ font-size:17px; margin:0; }
+  .back{
+    background:none; color:var(--ink-soft); font-size:14px; font-weight:600; padding:6px 4px;
+  }
+
+  table{ width:100%; border-collapse:collapse; font-size:14.5px; }
+  th{ text-align:left; padding:9px 8px; font-size:11.5px; letter-spacing:.5px; text-transform:uppercase; }
+  th.pump{ background:var(--pump-soft); color:var(--pump); }
+  th.cash{ background:var(--cash-soft); color:var(--cash); }
+  th.refund{ background:var(--refund-soft); color:var(--refund); }
+  td{ padding:9px 8px; border-bottom:1px solid var(--line); }
+  tr:last-child td{ border-bottom:none; }
+  td.num{ font-weight:600; }
+  td.empty-refund{ color:var(--ink-soft); }
+
+  .refund-action{ color:var(--refund); font-weight:700; background:none; padding:4px 0; font-size:13.5px; }
+  .refund-input-wrap{ display:flex; gap:6px; align-items:center; }
+  .refund-input-wrap input{
+    width:70px; font-size:14px; padding:6px 8px; border-radius:7px; border:1.5px solid var(--refund-soft);
+    background:var(--bg); color:var(--ink); font-variant-numeric: tabular-nums;
+  }
+  .refund-input-wrap button{
+    padding:6px 10px; font-size:13px; font-weight:700; border-radius:7px; background:var(--refund); color:#fff;
+  }
+
+  tfoot td{ font-weight:700; border-top:1.5px solid var(--ink); border-bottom:none; }
+  tfoot tr.net td{ background:var(--total-soft); color:#7a4a17; font-size:15.5px; padding-top:12px; padding-bottom:12px; }
+  tfoot tr.net td:first-child{ border-radius:0 0 0 8px; }
+  tfoot tr.net td:last-child{ border-radius:0 0 8px 0; }
+
+  .empty-state{ text-align:center; color:var(--ink-soft); padding:30px 10px; font-size:14px; }
+
+  .end-shift{
+    width:100%; margin-top:18px; padding:13px; font-size:14px; font-weight:700;
+    background:none; color:var(--refund); border:1.5px dashed var(--refund-soft); border-radius:10px;
+  }
+  .confirm-box{
+    background:var(--refund-soft); border-radius:10px; padding:14px; margin-top:12px; font-size:13.5px;
+  }
+  .confirm-box .actions{ display:flex; gap:8px; margin-top:10px; }
+  .confirm-box button{ flex:1; padding:10px; border-radius:8px; font-weight:700; font-size:13.5px; }
+  .confirm-yes{ background:var(--refund); color:#fff; }
+  .confirm-no{ background:#fff; color:var(--ink); border:1px solid var(--line); }
+</style>
+</head>
+<body>
+<div id="app">
+  <header class="top">
+    <h1>Shift Cash Tracker</h1>
+    <span id="status">loading…</span>
+  </header>
+
+  <!-- ENTRY VIEW -->
+  <div class="view active" id="view-entry">
+    <div class="ticket">
+      <div class="label">Transaction</div>
+      <div class="num" id="txn-number">1</div>
+    </div>
+
+    <div class="card">
+      <label class="field-label" for="entry">Pump, amount</label>
+      <input id="entry" type="text" inputmode="text" autocomplete="off" autocorrect="off" autocapitalize="off"
+             placeholder="e.g. 7, 30" enterkeyhint="done">
+      <div class="hint">Type pump number, a comma, then the dollar amount — like <strong>7, 30</strong> for $30 on pump 7.</div>
+      <div class="err" id="entry-error"></div>
+      <button class="btn-primary" id="btn-add">Add transaction</button>
+    </div>
+
+    <div class="row-btns" id="nav-buttons" style="display:none;">
+      <button class="btn-secondary totals" id="btn-show-totals">Total Daily Sales</button>
+      <button class="btn-secondary refund" id="btn-show-refund">Refund</button>
+    </div>
+  </div>
+
+  <!-- TOTALS VIEW -->
+  <div class="view" id="view-totals">
+    <div class="panel-header">
+      <h2>Total Daily Sales</h2>
+      <button class="back" id="back-from-totals">‹ Back</button>
+    </div>
+    <div class="card" id="totals-card"></div>
+    <button class="end-shift" id="btn-end-shift">End shift &amp; start new</button>
+    <div id="end-shift-confirm"></div>
+  </div>
+
+  <!-- REFUND VIEW -->
+  <div class="view" id="view-refund">
+    <div class="panel-header">
+      <h2>Issue a Refund</h2>
+      <button class="back" id="back-from-refund">‹ Back</button>
+    </div>
+    <div class="card" id="refund-card"></div>
+  </div>
+</div>
+
+<script>
+(function(){
+  // Paste the Web app URL from your Google Apps Script deployment here.
+  // See setup instructions — leave blank and "End Shift" will warn instead of saving.
+  const CONFIG = {
+    SHEET_WEBHOOK_URL: ''
+  };
+
+  const STORAGE_KEY = 'gas-shift-transactions';
+  let transactions = [];   // {id, pump, cash, refund}
+  let storageReady = false;
+
+  const $ = (id) => document.getElementById(id);
+  const views = { entry: $('view-entry'), totals: $('view-totals'), refund: $('view-refund') };
+
+  function showView(name){
+    Object.values(views).forEach(v => v.classList.remove('active'));
+    views[name].classList.add('active');
+    if (name === 'totals') renderTotals();
+    if (name === 'refund') renderRefund();
+    if (name === 'entry') { renderEntry(); $('entry').focus(); }
+  }
+
+  function fmt(n){ return '$' + Number(n).toFixed(2); }
+
+  async function sendShiftToSheet(payload){
+    // text/plain avoids a CORS preflight that Apps Script doesn't handle by default.
+    const res = await fetch(CONFIG.SHEET_WEBHOOK_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (data.status !== 'ok') throw new Error('Sheet rejected the data');
+    return data;
+  }
+
+  function save(){
+    try{
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(transactions));
+      $('status').textContent = '';
+    }catch(e){
+      $('status').textContent = 'not saved';
+      console.error('Storage save failed', e);
+    }
+  }
+
+  function load(){
+    try{
+      const raw = localStorage.getItem(STORAGE_KEY);
+      transactions = raw ? JSON.parse(raw) : [];
+    }catch(e){
+      transactions = [];
+    }
+    storageReady = true;
+    $('status').textContent = '';
+    renderEntry();
+  }
+
+  function nextTxnNumber(){ return transactions.length + 1; }
+
+  function renderEntry(){
+    $('txn-number').textContent = nextTxnNumber();
+    $('nav-buttons').style.display = transactions.length > 0 ? 'flex' : 'none';
+  }
+
+  function parseEntry(raw){
+    const cleaned = raw.replace(/\$/g, '').trim();
+    const m = cleaned.match(/^(\d{1,3})\s*[,\s]\s*(\d+(?:\.\d{1,2})?)$/);
+    if (!m) return null;
+    const pump = parseInt(m[1], 10);
+    const cash = parseFloat(m[2]);
+    if (pump <= 0 || cash <= 0) return null;
+    return { pump, cash };
+  }
+
+  function addTransaction(){
+    const input = $('entry');
+    const parsed = parseEntry(input.value);
+    if (!parsed){
+      $('entry-error').textContent = 'Enter as: pump, amount — e.g. 7, 30';
+      return;
+    }
+    $('entry-error').textContent = '';
+    transactions.push({ id: Date.now() + '-' + Math.random().toString(36).slice(2,7), pump: parsed.pump, cash: parsed.cash, refund: 0 });
+    input.value = '';
+    save();
+    renderEntry();
+    input.focus();
+  }
+
+  function totals(){
+    const cashTotal = transactions.reduce((s,t)=>s+t.cash,0);
+    const refundTotal = transactions.reduce((s,t)=>s+(t.refund||0),0);
+    return { cashTotal, refundTotal, net: cashTotal - refundTotal };
+  }
+
+  function buildTable(editableRefund){
+    if (transactions.length === 0){
+      return '<div class="empty-state">No transactions yet this shift.</div>';
+    }
+    const t = totals();
+    let rows = transactions.map(tx => {
+      let refundCell;
+      if (editableRefund){
+        refundCell = `<td>
+          <div class="refund-input-wrap">
+            <input type="text" inputmode="decimal" placeholder="0.00" value="${tx.refund ? tx.refund.toFixed(2) : ''}" data-id="${tx.id}" class="refund-field">
+            <button class="refund-save" data-id="${tx.id}">Save</button>
+          </div>
+        </td>`;
+      } else {
+        refundCell = tx.refund ? `<td class="num">${fmt(tx.refund)}</td>` : `<td class="empty-refund">—</td>`;
+      }
+      return `<tr>
+        <td class="num">${tx.pump}</td>
+        <td class="num">${fmt(tx.cash)}</td>
+        ${refundCell}
+      </tr>`;
+    }).join('');
+
+    return `
+      <table>
+        <thead><tr><th class="pump">Pump</th><th class="cash">Cash</th><th class="refund">Refund</th></tr></thead>
+        <tbody>${rows}</tbody>
+        <tfoot>
+          <tr><td>Total</td><td>${fmt(t.cashTotal)}</td><td>${fmt(t.refundTotal)}</td></tr>
+          <tr class="net"><td colspan="2">Total Daily Cash Sales</td><td>${fmt(t.net)}</td></tr>
+        </tfoot>
+      </table>`;
+  }
+
+  function renderTotals(){
+    $('totals-card').innerHTML = buildTable(false);
+    $('end-shift-confirm').innerHTML = '';
+  }
+
+  function renderRefund(){
+    $('refund-card').innerHTML = buildTable(true);
+    $('refund-card').querySelectorAll('.refund-save').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const id = btn.getAttribute('data-id');
+        const field = $('refund-card').querySelector(`.refund-field[data-id="${id}"]`);
+        const val = parseFloat(field.value);
+        const tx = transactions.find(t => t.id === id);
+        if (!tx) return;
+        tx.refund = isNaN(val) || val < 0 ? 0 : Math.round(val * 100) / 100;
+        save();
+        renderRefund();
+      });
+    });
+  }
+
+  // ---- wire up events ----
+  $('btn-add').addEventListener('click', addTransaction);
+  $('entry').addEventListener('keydown', (e) => { if (e.key === 'Enter') addTransaction(); });
+  $('entry').addEventListener('input', () => { $('entry-error').textContent = ''; });
+
+  $('btn-show-totals').addEventListener('click', () => showView('totals'));
+  $('btn-show-refund').addEventListener('click', () => showView('refund'));
+  $('back-from-totals').addEventListener('click', () => showView('entry'));
+  $('back-from-refund').addEventListener('click', () => showView('entry'));
+
+  $('btn-end-shift').addEventListener('click', () => {
+    $('end-shift-confirm').innerHTML = `
+      <div class="confirm-box">
+        This saves the shift to your Google Sheet, then clears transactions for a fresh shift.
+        <div class="actions">
+          <button class="confirm-no" id="cancel-end">Cancel</button>
+          <button class="confirm-yes" id="confirm-end">End shift</button>
+        </div>
+      </div>`;
+    $('cancel-end').addEventListener('click', () => { $('end-shift-confirm').innerHTML = ''; });
+    $('confirm-end').addEventListener('click', async () => {
+      if (!CONFIG.SHEET_WEBHOOK_URL){
+        $('end-shift-confirm').innerHTML = `
+          <div class="confirm-box">
+            No Google Sheet is connected yet (the link in the code is blank). Transactions have <strong>not</strong> been cleared.
+            <div class="actions"><button class="confirm-no" id="cancel-end2">Close</button></div>
+          </div>`;
+        $('cancel-end2').addEventListener('click', () => { $('end-shift-confirm').innerHTML = ''; });
+        return;
+      }
+
+      const btn = $('confirm-end');
+      btn.textContent = 'Saving…';
+      btn.disabled = true;
+
+      const t = totals();
+      const payload = {
+        endedAt: new Date().toLocaleString(),
+        transactions: transactions.map(tx => ({ pump: tx.pump, cash: tx.cash, refund: tx.refund || 0 })),
+        cashTotal: t.cashTotal,
+        refundTotal: t.refundTotal,
+        net: t.net
+      };
+
+      try{
+        await sendShiftToSheet(payload);
+        transactions = [];
+        save();
+        $('end-shift-confirm').innerHTML = '';
+        showView('entry');
+      }catch(e){
+        console.error('Sheet save failed', e);
+        $('end-shift-confirm').innerHTML = `
+          <div class="confirm-box">
+            Couldn't confirm the Google Sheet received this shift. Your transactions are still here and have <strong>not</strong> been cleared — check the connection and tap End Shift again.
+            <div class="actions"><button class="confirm-no" id="cancel-end3">Close</button></div>
+          </div>`;
+        $('cancel-end3').addEventListener('click', () => { $('end-shift-confirm').innerHTML = ''; });
+      }
+    });
+  });
+
+  load();
+})();
+</script>
+</body>
+</html>
