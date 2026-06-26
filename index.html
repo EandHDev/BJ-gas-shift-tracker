@@ -182,6 +182,7 @@
     <div class="card" id="login-names">
       <label class="field-label">Who's on shift?</label>
       <div class="staff-list" id="staff-list"></div>
+      <div class="err" id="login-lock-msg" style="margin-top:10px;"></div>
     </div>
     <div class="card pin-screen" id="login-pin" style="display:none;">
       <div class="who" id="pin-who"></div>
@@ -249,13 +250,23 @@
     STAFF: [
       { name: 'Raj', pin: '1969' },
       { name: 'Jay', pin: '2222' },
-      { name: 'Nigel', pin: '1412' }
+      { name: 'Nigel', pin: '1412', isAdmin: true }
     ]
   };
 
-  const USER_KEY = 'gas-shift-user';
+  const ACTIVE_KEY = 'gas-shift-active-cashier';
   let currentUser = null; // { name }
   let pendingStaff = null;
+
+  function getActiveCashier(){
+    try{ return localStorage.getItem(ACTIVE_KEY) || null; }catch(e){ return null; }
+  }
+  function setActiveCashier(name){
+    try{ localStorage.setItem(ACTIVE_KEY, name); }catch(e){}
+  }
+  function clearActiveCashier(){
+    try{ localStorage.removeItem(ACTIVE_KEY); }catch(e){}
+  }
 
   const STORAGE_KEY = 'gas-shift-transactions';
   let transactions = [];   // {id, pump, cash, refund}
@@ -275,36 +286,42 @@
 
   function fmt(n){ return '$' + Number(n).toFixed(2); }
 
-  function saveUser(){
-    try{ localStorage.setItem(USER_KEY, JSON.stringify(currentUser)); }catch(e){}
-  }
-  function loadUser(){
-    try{
-      const raw = localStorage.getItem(USER_KEY);
-      currentUser = raw ? JSON.parse(raw) : null;
-    }catch(e){ currentUser = null; }
-  }
   function signOut(){
     currentUser = null;
-    saveUser();
     showView('login');
   }
 
   function renderLogin(){
+    if (getActiveCashier() && transactions.length === 0) clearActiveCashier(); // defensive cleanup
+
     $('login-names').style.display = 'block';
     $('login-pin').style.display = 'none';
     $('pin-input').value = '';
     $('pin-error').textContent = '';
+    $('login-lock-msg').textContent = '';
     pendingStaff = null;
     $('staff-list').innerHTML = CONFIG.STAFF.map(s =>
       `<button class="staff-btn" data-name="${s.name}">${s.name}</button>`
     ).join('');
     $('staff-list').querySelectorAll('.staff-btn').forEach(btn => {
       btn.addEventListener('click', () => {
-        pendingStaff = CONFIG.STAFF.find(s => s.name === btn.getAttribute('data-name'));
+        const staff = CONFIG.STAFF.find(s => s.name === btn.getAttribute('data-name'));
+        const active = getActiveCashier();
+        const isOverride = active && active !== staff.name;
+
+        if (isOverride && !staff.isAdmin){
+          $('login-lock-msg').textContent =
+            `A shift is already in progress under ${active}. Only ${active}, or an admin, can sign in until it's ended.`;
+          return;
+        }
+
+        $('login-lock-msg').textContent = '';
+        pendingStaff = staff;
         $('login-names').style.display = 'none';
         $('login-pin').style.display = 'block';
-        $('pin-who').textContent = 'Enter PIN for ' + pendingStaff.name;
+        $('pin-who').textContent = (isOverride && staff.isAdmin)
+          ? `Admin override — enter PIN for ${staff.name} to take over ${active}'s shift`
+          : 'Enter PIN for ' + staff.name;
         $('pin-input').value = '';
         $('pin-error').textContent = '';
         $('pin-input').focus();
@@ -315,8 +332,7 @@
   function attemptPinLogin(){
     if (!pendingStaff) return;
     if ($('pin-input').value === pendingStaff.pin){
-      currentUser = { name: pendingStaff.name };
-      saveUser();
+      currentUser = { name: pendingStaff.name, isAdmin: !!pendingStaff.isAdmin };
       showView('entry');
     } else {
       $('pin-error').textContent = 'Incorrect PIN — try again.';
@@ -356,8 +372,7 @@
     }
     storageReady = true;
     $('status').textContent = '';
-    loadUser();
-    if (currentUser){ showView('entry'); } else { showView('login'); }
+    showView('login'); // always require sign-in when the link is opened/reloaded
   }
 
   function nextTxnNumber(){ return transactions.length + 1; }
@@ -365,7 +380,12 @@
   function renderEntry(){
     $('txn-number').textContent = nextTxnNumber();
     $('nav-buttons').style.display = transactions.length > 0 ? 'flex' : 'none';
-    $('signed-in-label').textContent = currentUser ? ('Signed in as ' + currentUser.name) : '';
+    const active = getActiveCashier();
+    let label = currentUser ? ('Signed in as ' + currentUser.name) : '';
+    if (currentUser && active && active !== currentUser.name){
+      label += ' — covering ' + active + '\u2019s shift';
+    }
+    $('signed-in-label').textContent = label;
   }
 
   function parseEntry(raw){
@@ -386,6 +406,7 @@
       return;
     }
     $('entry-error').textContent = '';
+    if (transactions.length === 0 && currentUser){ setActiveCashier(currentUser.name); }
     transactions.push({ id: Date.now() + '-' + Math.random().toString(36).slice(2,7), pump: parsed.pump, cash: parsed.cash, refund: 0 });
     input.value = '';
     save();
@@ -497,9 +518,11 @@
 
       const t = totals();
       const now = new Date();
+      const shiftOwner = getActiveCashier() || (currentUser ? currentUser.name : 'Unknown');
+      const closedByAdmin = currentUser && shiftOwner !== currentUser.name;
       const payload = {
         endedAt: now.toLocaleString(),
-        cashier: currentUser ? currentUser.name : 'Unknown',
+        cashier: closedByAdmin ? `${shiftOwner} (closed by ${currentUser.name})` : shiftOwner,
         shiftType: now.getHours() < 15 ? 'Morning' : 'Evening',
         transactions: transactions.map(tx => ({ pump: tx.pump, cash: tx.cash, refund: tx.refund || 0 })),
         cashTotal: t.cashTotal,
@@ -511,6 +534,7 @@
         await sendShiftToSheet(payload);
         transactions = [];
         save();
+        clearActiveCashier();
         $('end-shift-confirm').innerHTML = '';
         signOut();
       }catch(e){
