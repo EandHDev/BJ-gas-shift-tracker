@@ -6,7 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Shift Cash">
-<title>BJ's Gas Station — Shift Cash Tracker</title>
+<title>Gas Station — Shift Cash Tracker</title>
 <style>
   :root{
     --bg:#FAF7F2;
@@ -148,6 +148,26 @@
   .confirm-box button{ flex:1; padding:10px; border-radius:8px; font-weight:700; font-size:13.5px; }
   .confirm-yes{ background:var(--refund); color:#fff; }
   .confirm-no{ background:#fff; color:var(--ink); border:1px solid var(--line); }
+
+  /* ---- sign-in ---- */
+  .staff-list{ display:flex; flex-direction:column; gap:10px; }
+  .staff-btn{
+    width:100%; padding:18px; font-size:17px; font-weight:700; border-radius:12px;
+    border:1.5px solid var(--line); background:var(--card); color:var(--ink); text-align:left;
+  }
+  .staff-btn:active{ opacity:.8; }
+  .pin-screen .who{ font-size:15px; color:var(--ink-soft); margin-bottom:14px; }
+  input#pin-input{
+    width:100%; font-size:32px; letter-spacing:14px; text-align:center; padding:16px 14px;
+    border-radius:10px; border:1.5px solid var(--line); background:var(--bg); color:var(--ink);
+    font-family:inherit; font-variant-numeric: tabular-nums;
+  }
+  input#pin-input:focus{ outline:none; border-color:var(--cash); }
+  .signed-in-bar{
+    display:flex; align-items:center; justify-content:space-between;
+    font-size:12.5px; color:var(--ink-soft); margin:-6px 2px 16px;
+  }
+  .signed-in-bar button{ background:none; color:var(--cash); font-size:12.5px; font-weight:700; padding:2px; }
 </style>
 </head>
 <body>
@@ -157,8 +177,27 @@
     <span id="status">loading…</span>
   </header>
 
+  <!-- LOGIN VIEW -->
+  <div class="view active" id="view-login">
+    <div class="card" id="login-names">
+      <label class="field-label">Who's on shift?</label>
+      <div class="staff-list" id="staff-list"></div>
+    </div>
+    <div class="card pin-screen" id="login-pin" style="display:none;">
+      <div class="who" id="pin-who"></div>
+      <input id="pin-input" type="password" inputmode="numeric" maxlength="4" autocomplete="off" placeholder="••••">
+      <div class="err" id="pin-error"></div>
+      <button class="btn-primary" id="btn-pin-submit">Sign In</button>
+      <button class="back" id="btn-pin-back" style="margin-top:10px;">‹ Choose a different name</button>
+    </div>
+  </div>
+
   <!-- ENTRY VIEW -->
-  <div class="view active" id="view-entry">
+  <div class="view" id="view-entry">
+    <div class="signed-in-bar">
+      <span id="signed-in-label"></span>
+      <button id="btn-switch-user">Switch user</button>
+    </div>
     <div class="ticket">
       <div class="label">Transaction</div>
       <div class="num" id="txn-number">1</div>
@@ -205,25 +244,86 @@
   // Paste the Web app URL from your Google Apps Script deployment here.
   // See setup instructions — leave blank and "End Shift" will warn instead of saving.
   const CONFIG = {
-    SHEET_WEBHOOK_URL: 'https://script.google.com/macros/s/AKfycbxhnvstPhZZxPfPzCKXI1LZqx-e0pVwO1JPuGXq23_u8Rn1xqzyCUbVIWwNuSxcuHCc/exec'
+    SHEET_WEBHOOK_URL: 'https://script.google.com/macros/s/AKfycbxhnvstPhZZxPfPzCKXI1LZqx-e0pVwO1JPuGXq23_u8Rn1xqzyCUbVIWwNuSxcuHCc/exec',
+    // Edit names and 4-digit PINs for your 3 staff here.
+    STAFF: [
+      { name: 'Raj', pin: '1969' },
+      { name: 'Jay', pin: '2222' },
+      { name: 'Nigel', pin: '1412' }
+    ]
   };
+
+  const USER_KEY = 'gas-shift-user';
+  let currentUser = null; // { name }
+  let pendingStaff = null;
 
   const STORAGE_KEY = 'gas-shift-transactions';
   let transactions = [];   // {id, pump, cash, refund}
   let storageReady = false;
 
   const $ = (id) => document.getElementById(id);
-  const views = { entry: $('view-entry'), totals: $('view-totals'), refund: $('view-refund') };
+  const views = { login: $('view-login'), entry: $('view-entry'), totals: $('view-totals'), refund: $('view-refund') };
 
   function showView(name){
     Object.values(views).forEach(v => v.classList.remove('active'));
     views[name].classList.add('active');
+    if (name === 'login') renderLogin();
     if (name === 'totals') renderTotals();
     if (name === 'refund') renderRefund();
     if (name === 'entry') { renderEntry(); $('entry').focus(); }
   }
 
   function fmt(n){ return '$' + Number(n).toFixed(2); }
+
+  function saveUser(){
+    try{ localStorage.setItem(USER_KEY, JSON.stringify(currentUser)); }catch(e){}
+  }
+  function loadUser(){
+    try{
+      const raw = localStorage.getItem(USER_KEY);
+      currentUser = raw ? JSON.parse(raw) : null;
+    }catch(e){ currentUser = null; }
+  }
+  function signOut(){
+    currentUser = null;
+    saveUser();
+    showView('login');
+  }
+
+  function renderLogin(){
+    $('login-names').style.display = 'block';
+    $('login-pin').style.display = 'none';
+    $('pin-input').value = '';
+    $('pin-error').textContent = '';
+    pendingStaff = null;
+    $('staff-list').innerHTML = CONFIG.STAFF.map(s =>
+      `<button class="staff-btn" data-name="${s.name}">${s.name}</button>`
+    ).join('');
+    $('staff-list').querySelectorAll('.staff-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        pendingStaff = CONFIG.STAFF.find(s => s.name === btn.getAttribute('data-name'));
+        $('login-names').style.display = 'none';
+        $('login-pin').style.display = 'block';
+        $('pin-who').textContent = 'Enter PIN for ' + pendingStaff.name;
+        $('pin-input').value = '';
+        $('pin-error').textContent = '';
+        $('pin-input').focus();
+      });
+    });
+  }
+
+  function attemptPinLogin(){
+    if (!pendingStaff) return;
+    if ($('pin-input').value === pendingStaff.pin){
+      currentUser = { name: pendingStaff.name };
+      saveUser();
+      showView('entry');
+    } else {
+      $('pin-error').textContent = 'Incorrect PIN — try again.';
+      $('pin-input').value = '';
+      $('pin-input').focus();
+    }
+  }
 
   async function sendShiftToSheet(payload){
     // text/plain avoids a CORS preflight that Apps Script doesn't handle by default.
@@ -256,7 +356,8 @@
     }
     storageReady = true;
     $('status').textContent = '';
-    renderEntry();
+    loadUser();
+    if (currentUser){ showView('entry'); } else { showView('login'); }
   }
 
   function nextTxnNumber(){ return transactions.length + 1; }
@@ -264,6 +365,7 @@
   function renderEntry(){
     $('txn-number').textContent = nextTxnNumber();
     $('nav-buttons').style.display = transactions.length > 0 ? 'flex' : 'none';
+    $('signed-in-label').textContent = currentUser ? ('Signed in as ' + currentUser.name) : '';
   }
 
   function parseEntry(raw){
@@ -354,6 +456,11 @@
   }
 
   // ---- wire up events ----
+  $('btn-pin-submit').addEventListener('click', attemptPinLogin);
+  $('pin-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') attemptPinLogin(); });
+  $('btn-pin-back').addEventListener('click', () => { renderLogin(); });
+  $('btn-switch-user').addEventListener('click', () => { signOut(); });
+
   $('btn-add').addEventListener('click', addTransaction);
   $('entry').addEventListener('keydown', (e) => { if (e.key === 'Enter') addTransaction(); });
   $('entry').addEventListener('input', () => { $('entry-error').textContent = ''; });
@@ -389,8 +496,11 @@
       btn.disabled = true;
 
       const t = totals();
+      const now = new Date();
       const payload = {
-        endedAt: new Date().toLocaleString(),
+        endedAt: now.toLocaleString(),
+        cashier: currentUser ? currentUser.name : 'Unknown',
+        shiftType: now.getHours() < 15 ? 'Morning' : 'Evening',
         transactions: transactions.map(tx => ({ pump: tx.pump, cash: tx.cash, refund: tx.refund || 0 })),
         cashTotal: t.cashTotal,
         refundTotal: t.refundTotal,
@@ -402,7 +512,7 @@
         transactions = [];
         save();
         $('end-shift-confirm').innerHTML = '';
-        showView('entry');
+        signOut();
       }catch(e){
         console.error('Sheet save failed', e);
         $('end-shift-confirm').innerHTML = `
