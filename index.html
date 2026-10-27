@@ -242,10 +242,10 @@
 
 <script>
 (function(){
-  // Paste the Web app URL from your Google Apps Script deployment here.
-  // See setup instructions — leave blank and "End Shift" will warn instead of saving.
   const CONFIG = {
-    SHEET_WEBHOOK_URL: 'https://script.google.com/macros/s/AKfycbxhnvstPhZZxPfPzCKXI1LZqx-e0pVwO1JPuGXq23_u8Rn1xqzyCUbVIWwNuSxcuHCc/exec',
+    // >>> PASTE THE NEW Web app URL (ending in /exec) BETWEEN THE QUOTES BELOW <<<
+    // While this is blank, "End Shift" warns and keeps the transactions instead of clearing them.
+    SHEET_WEBHOOK_URL: 'https://script.google.com/macros/s/AKfycbxAPt_lrjbJYSO05DaTkcJqj2VzZlksJOVWKEwi2-UyTb24jgje5jxNgiv5psdzrpJo/exec',
     // Edit names and 4-digit PINs for your 3 staff here.
     STAFF: [
       { name: 'Raj', pin: '1969' },
@@ -349,7 +349,7 @@
       body: JSON.stringify(payload)
     });
     const data = await res.json();
-    if (data.status !== 'ok') throw new Error('Sheet rejected the data');
+    if (data.status !== 'ok') throw new Error(data.message || 'Sheet rejected the data');
     return data;
   }
 
