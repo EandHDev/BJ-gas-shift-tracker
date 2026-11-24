@@ -168,6 +168,13 @@
     font-size:12.5px; color:var(--ink-soft); margin:-6px 2px 16px;
   }
   .signed-in-bar button{ background:none; color:var(--cash); font-size:12.5px; font-weight:700; padding:2px; }
+
+  /* ---- auto-end notice ---- */
+  .notice{
+    background:var(--total-soft); color:#7a4a17; border-radius:10px;
+    padding:12px 14px; font-size:13.5px; font-weight:600; margin-bottom:14px;
+  }
+  .notice:empty{ display:none; }
 </style>
 </head>
 <body>
@@ -179,6 +186,7 @@
 
   <!-- LOGIN VIEW -->
   <div class="view active" id="view-login">
+    <div class="notice" id="login-notice"></div>
     <div class="card" id="login-names">
       <label class="field-label">Who's on shift?</label>
       <div class="staff-list" id="staff-list"></div>
@@ -246,6 +254,8 @@
     // >>> PASTE THE NEW Web app URL (ending in /exec) BETWEEN THE QUOTES BELOW <<<
     // While this is blank, "End Shift" warns and keeps the transactions instead of clearing them.
     SHEET_WEBHOOK_URL: 'https://script.google.com/macros/s/AKfycbxAPt_lrjbJYSO05DaTkcJqj2VzZlksJOVWKEwi2-UyTb24jgje5jxNgiv5psdzrpJo/exec',
+    // A shift is ended automatically this many hours after the cashier signed in for it.
+    MAX_SHIFT_HOURS: 9,
     // Edit names and 4-digit PINs for your 3 staff here.
     STAFF: [
       { name: 'Raj', pin: '1969' },
@@ -255,8 +265,12 @@
   };
 
   const ACTIVE_KEY = 'gas-shift-active-cashier';
+  const SHIFT_START_KEY = 'gas-shift-started-at';
   let currentUser = null; // { name }
   let pendingStaff = null;
+  let loginNotice = '';
+  let submitting = false;          // true while a shift is being sent to the sheet
+  let autoEndNotifiedFor = null;   // deadline we've already signed the user out for after a failed auto-end
 
   function getActiveCashier(){
     try{ return localStorage.getItem(ACTIVE_KEY) || null; }catch(e){ return null; }
@@ -266,6 +280,20 @@
   }
   function clearActiveCashier(){
     try{ localStorage.removeItem(ACTIVE_KEY); }catch(e){}
+  }
+
+  function getShiftStart(){
+    try{ const v = Number(localStorage.getItem(SHIFT_START_KEY)); return v > 0 ? v : null; }catch(e){ return null; }
+  }
+  function setShiftStart(ms){
+    try{ localStorage.setItem(SHIFT_START_KEY, String(ms)); }catch(e){}
+  }
+  function clearShiftStart(){
+    try{ localStorage.removeItem(SHIFT_START_KEY); }catch(e){}
+  }
+  function shiftDeadline(){
+    const start = getShiftStart();
+    return start ? start + CONFIG.MAX_SHIFT_HOURS * 60 * 60 * 1000 : null;
   }
 
   const STORAGE_KEY = 'gas-shift-transactions';
@@ -294,6 +322,7 @@
   function renderLogin(){
     if (getActiveCashier() && transactions.length === 0) clearActiveCashier(); // defensive cleanup
 
+    $('login-notice').textContent = loginNotice;
     $('login-names').style.display = 'block';
     $('login-pin').style.display = 'none';
     $('pin-input').value = '';
@@ -332,6 +361,10 @@
   function attemptPinLogin(){
     if (!pendingStaff) return;
     if ($('pin-input').value === pendingStaff.pin){
+      // A new shift starts its 9-hour clock at sign-in. Signing back in to a shift
+      // that already has transactions keeps the original start time.
+      if (transactions.length === 0 || !getShiftStart()) setShiftStart(Date.now());
+      loginNotice = '';
       currentUser = { name: pendingStaff.name, isAdmin: !!pendingStaff.isAdmin };
       showView('entry');
     } else {
@@ -353,6 +386,75 @@
     return data;
   }
 
+  // Sends the current shift to the sheet and clears it from this device.
+  // Throws (and keeps the transactions) if the sheet doesn't confirm.
+  async function submitShift(endDate, note){
+    const t = totals();
+    const shiftOwner = getActiveCashier() || (currentUser ? currentUser.name : 'Unknown');
+    // Shift type comes from when the cashier signed in: before midday = Morning, midday or later = Evening.
+    const startMs = getShiftStart() || endDate.getTime();
+    const payload = {
+      endedAtMs: endDate.getTime(),            // the sheet turns this into a real date, whatever the device's region
+      endedAt: endDate.toISOString(),
+      shiftStartMs: startMs,
+      cashier: shiftOwner,
+      note: note || '',
+      shiftType: new Date(startMs).getHours() < 12 ? 'Morning' : 'Evening',
+      transactions: transactions.map(tx => ({ pump: tx.pump, cash: tx.cash, refund: tx.refund || 0 })),
+      cashTotal: t.cashTotal,
+      refundTotal: t.refundTotal,
+      net: t.net
+    };
+    await sendShiftToSheet(payload);
+    transactions = [];
+    save();
+    clearActiveCashier();
+    clearShiftStart();
+  }
+
+  async function checkAutoEnd(){
+    const deadline = shiftDeadline();
+    if (!deadline || submitting || Date.now() < deadline) return;
+    const hrs = CONFIG.MAX_SHIFT_HOURS;
+
+    // Nothing to save: just close the shift and sign out.
+    if (transactions.length === 0){
+      clearShiftStart();
+      clearActiveCashier();
+      if (currentUser){
+        loginNotice = `Signed out automatically after ${hrs} hours.`;
+        signOut();
+      }
+      return;
+    }
+    if (!CONFIG.SHEET_WEBHOOK_URL) return;
+
+    submitting = true;
+    const owner = getActiveCashier() || (currentUser ? currentUser.name : 'Unknown');
+    try{
+      await submitShift(new Date(deadline), `Auto-ended after ${hrs} hours`);
+      loginNotice = `${owner}'s shift was ended automatically after ${hrs} hours and saved to the sheet.`;
+      autoEndNotifiedFor = null;
+      $('status').textContent = '';
+      currentUser = null;
+      showView('login');
+    }catch(e){
+      console.error('Auto-end failed', e);
+      $('status').textContent = 'overdue shift not saved — retrying';
+      loginNotice = `${owner}'s shift passed ${hrs} hours but couldn't be saved yet (${String(e.message || e)}). ` +
+                    `It will keep retrying every minute — keep this device online.`;
+      if (autoEndNotifiedFor !== deadline){   // sign out once, then retry quietly
+        autoEndNotifiedFor = deadline;
+        currentUser = null;
+        showView('login');
+      } else if (views.login.classList.contains('active')){
+        $('login-notice').textContent = loginNotice;
+      }
+    }finally{
+      submitting = false;
+    }
+  }
+
   function save(){
     try{
       localStorage.setItem(STORAGE_KEY, JSON.stringify(transactions));
@@ -370,9 +472,12 @@
     }catch(e){
       transactions = [];
     }
+    // A shift already in progress from before this update has no start time; start its clock now.
+    if (transactions.length > 0 && !getShiftStart()) setShiftStart(Date.now());
     storageReady = true;
     $('status').textContent = '';
     showView('login'); // always require sign-in when the link is opened/reloaded
+    checkAutoEnd();
   }
 
   function nextTxnNumber(){ return transactions.length + 1; }
@@ -383,7 +488,11 @@
     const active = getActiveCashier();
     let label = currentUser ? ('Signed in as ' + currentUser.name) : '';
     if (currentUser && active && active !== currentUser.name){
-      label += ' — covering ' + active + '\u2019s shift';
+      label += ' — covering ' + active + '’s shift';
+    }
+    const deadline = shiftDeadline();
+    if (currentUser && deadline){
+      label += ' · auto-ends ' + new Date(deadline).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
     }
     $('signed-in-label').textContent = label;
   }
@@ -406,7 +515,10 @@
       return;
     }
     $('entry-error').textContent = '';
-    if (transactions.length === 0 && currentUser){ setActiveCashier(currentUser.name); }
+    if (transactions.length === 0 && currentUser){
+      setActiveCashier(currentUser.name);
+      if (!getShiftStart()) setShiftStart(Date.now());
+    }
     transactions.push({ id: Date.now() + '-' + Math.random().toString(36).slice(2,7), pump: parsed.pump, cash: parsed.cash, refund: 0 });
     input.value = '';
     save();
@@ -511,31 +623,20 @@
         $('cancel-end2').addEventListener('click', () => { $('end-shift-confirm').innerHTML = ''; });
         return;
       }
+      if (submitting) return;
 
       const btn = $('confirm-end');
       btn.textContent = 'Saving…';
       btn.disabled = true;
 
-      const t = totals();
-      const now = new Date();
       const shiftOwner = getActiveCashier() || (currentUser ? currentUser.name : 'Unknown');
-      const closedByAdmin = currentUser && shiftOwner !== currentUser.name;
-      const payload = {
-        endedAt: now.toLocaleString(),
-        cashier: closedByAdmin ? `${shiftOwner} (closed by ${currentUser.name})` : shiftOwner,
-        shiftType: now.getHours() < 15 ? 'Morning' : 'Evening',
-        transactions: transactions.map(tx => ({ pump: tx.pump, cash: tx.cash, refund: tx.refund || 0 })),
-        cashTotal: t.cashTotal,
-        refundTotal: t.refundTotal,
-        net: t.net
-      };
+      const note = (currentUser && shiftOwner !== currentUser.name) ? `Closed by ${currentUser.name}` : '';
 
+      submitting = true;
       try{
-        await sendShiftToSheet(payload);
-        transactions = [];
-        save();
-        clearActiveCashier();
+        await submitShift(new Date(), note);
         $('end-shift-confirm').innerHTML = '';
+        loginNotice = '';
         signOut();
       }catch(e){
         console.error('Sheet save failed', e);
@@ -546,9 +647,16 @@
             <div class="actions"><button class="confirm-no" id="cancel-end3">Close</button></div>
           </div>`;
         $('cancel-end3').addEventListener('click', () => { $('end-shift-confirm').innerHTML = ''; });
+      }finally{
+        submitting = false;
       }
     });
   });
+
+  // ---- 9-hour auto-end: check every minute, and whenever the app comes back on screen or online ----
+  setInterval(checkAutoEnd, 60 * 1000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) checkAutoEnd(); });
+  window.addEventListener('online', checkAutoEnd);
 
   load();
 })();
